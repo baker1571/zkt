@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+!/usr/bin/env bash
 
 BASE_DIR="${1:-.}"
 
@@ -18,9 +18,9 @@ declare -a menu_colors
 declare -A printed
 
 cursor=0
-scroll=0
+page_index=0
 count=0
-
+page_size=0
 header=(
 "  ____      __  __      ____            __          "
 " /_  / ___ / /_/ /____ / / /_____  ___ / /____ ___  "
@@ -28,15 +28,13 @@ header=(
 " /___/\__/\__/\__/\__/_/_/\_\\\_,_/___/\__/\__/_//_/ "
 ""
 "Navigate: j/k move | Enter open | l lit-note | p perm-note | r refresh | q quit"
-""
-)
+"")
 
 build_tree() {
     local current_id="$1"
     local indent="$2"
 
-    name=$(basename "${files_by_id[$current_id]}")
-
+    local name=$(basename "${files_by_id[$current_id]}")
     menu_files+=("${files_by_id[$current_id]}")
     menu_labels+=("${indent}${name}")
     menu_colors+=("normal")
@@ -91,48 +89,89 @@ refresh_menu() {
 
     count=${#menu_labels[@]}
     ((cursor >= count)) && cursor=$((count-1))
-}
 
-draw_menu() {
+    # calculate page size
     rows=$(tput lines)
     header_lines=${#header[@]}
-    menu_height=$((rows - header_lines))
-    ((menu_height < 1)) && menu_height=1
+    page_size=$((rows - header_lines))
+    ((page_size < 1)) && page_size=1
+    page_index=$((cursor / page_size))
+}
 
-    if ((cursor < scroll)); then scroll=$cursor; fi
-    if ((cursor >= scroll + menu_height)); then scroll=$((cursor - menu_height + 1)); fi
-
+draw_page() {
     tput clear
-
     for line in "${header[@]}"; do
         echo "$line"
     done
 
-    for ((i=scroll; i<scroll+menu_height && i<count; i++)); do
-        label="${menu_labels[$i]}"
-        [[ ${menu_colors[$i]} == "red" ]] && label="\033[31m${label}\033[0m"
-        if [[ $i -eq $cursor ]]; then
-            printf "\e[7m%b\e[0m\n" "$label"
-        else
-            printf "%b\n" "$label"
-        fi
+    start=$((page_index * page_size))
+    end=$((start + page_size - 1))
+    ((end >= count)) && end=$((count - 1))
+
+    for ((i=start; i<=end; i++)); do
+        draw_line $i
     done
 }
 
-open_file() {
-    file="${menu_files[$cursor]}"
-    "${EDITOR:-vim}" "$file"
-    refresh_menu
+draw_line() {
+    local idx=$1
+    local start=$((page_index * page_size))
+    local row=$((idx - start + ${#header[@]}))
+    tput cup $row 0
+
+    local label="${menu_labels[$idx]}"
+    [[ ${menu_colors[$idx]} == "red" ]] && label="\033[31m${label}\033[0m"
+    if [[ $idx -eq $cursor ]]; then
+        printf "\e[7m%b\e[0m" "$label"
+    else
+        printf "%b" "$label"
+    fi
+    tput el # clear to end of line to avoid leftover characters
 }
 
-refresh_menu
+move_cursor() {
+    local old_cursor=$cursor
+    local old_page=$page_index
+
+    case "$1" in
+        up)
+            ((cursor--))
+            ((cursor<0)) && cursor=$((count-1))
+            ;;
+        down)
+            ((cursor++))
+            ((cursor>=count)) && cursor=0
+            ;;
+    esac
+
+    page_index=$((cursor / page_size))
+
+    if ((page_index != old_page)); then
+        draw_page
+    else
+        draw_line $old_cursor
+        draw_line $cursor
+    fi
+}
+
+open_file() {
+    "${EDITOR:-vim}" "${menu_files[$cursor]}"
+    refresh_menu
+    draw_page
+}
+
+refresh_and_draw() {
+    refresh_menu
+    draw_page
+}
+
+refresh_and_draw
 
 while true; do
-    draw_menu
     read -rsn1 key
     case "$key" in
-        k) ((cursor--)); ((cursor<0)) && cursor=$((count-1)) ;;
-        j) ((cursor++)); ((cursor>=count)) && cursor=0 ;;
+        k) move_cursor up ;;
+        j) move_cursor down ;;
         "") open_file ;;
         l)
             tput clear
@@ -156,7 +195,7 @@ tags:
 ---
 EOF
             "${EDITOR:-nvim}" +13 "$file"
-            refresh_menu
+            refresh_and_draw
             ;;
         p)
             tput clear
@@ -177,9 +216,9 @@ tags:
 ---
 EOF
             "${EDITOR:-nvim}" +10 "$file"
-            refresh_menu
+            refresh_and_draw
             ;;
-        r) refresh_menu ;;
-        q) exit ;;
+        r) refresh_and_draw ;;
+        q) tput clear; exit ;;
     esac
 done
