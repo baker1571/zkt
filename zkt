@@ -1,4 +1,4 @@
-!/usr/bin/env bash
+#!/usr/bin/env bash
 
 BASE_DIR="${1:-.}"
 
@@ -21,23 +21,43 @@ cursor=0
 page_index=0
 count=0
 page_size=0
-header=(
+total_pages=1
+
+# ASCII header
+header_ascii=(
 "  ____      __  __      ____            __          "
 " /_  / ___ / /_/ /____ / / /_____  ___ / /____ ___  "
 "  / /_/ -_) __/ __/ -_) /  '_/ _ \(_-</ __/ -_) _ \ "
 " /___/\__/\__/\__/\__/_/_/\_\\\_,_/___/\__/\__/_//_/ "
 ""
 "Navigate: j/k move | Enter open | l lit-note | p perm-note | r refresh | q quit"
-"")
+""
+)
+
+get_color_for_file() {
+    local file="$1"
+    local name
+    name=$(basename "$file")
+
+    if [[ "$name" == *_L_* ]]; then
+        echo "cyan"
+    elif [[ "$name" == *_T_* ]]; then
+        echo "magenta"
+    else
+        echo "normal"
+    fi
+}
 
 build_tree() {
     local current_id="$1"
     local indent="$2"
 
-    local name=$(basename "${files_by_id[$current_id]}")
+    local name
+    name=$(basename "${files_by_id[$current_id]}")
+
     menu_files+=("${files_by_id[$current_id]}")
     menu_labels+=("${indent}${name}")
-    menu_colors+=("normal")
+    menu_colors+=("$(get_color_for_file "${files_by_id[$current_id]}")")
 
     for linked_id in ${references[$current_id]}; do
         if [[ -n "${files_by_id[$linked_id]}" ]]; then
@@ -47,7 +67,11 @@ build_tree() {
             else
                 menu_files+=("${files_by_id[$linked_id]}")
                 menu_labels+=("  ${indent}$(basename "${files_by_id[$linked_id]}")")
-                menu_colors+=("red")
+
+                base_color=$(get_color_for_file "${files_by_id[$linked_id]}")
+                [[ "$base_color" == "normal" ]] && base_color="red"
+
+                menu_colors+=("$base_color")
             fi
         fi
     done
@@ -90,19 +114,46 @@ refresh_menu() {
     count=${#menu_labels[@]}
     ((cursor >= count)) && cursor=$((count-1))
 
-    # calculate page size
     rows=$(tput lines)
-    header_lines=${#header[@]}
+    header_lines=$(( ${#header_ascii[@]} + 1 ))
     page_size=$((rows - header_lines))
     ((page_size < 1)) && page_size=1
+
+    total_pages=$(( (count + page_size - 1) / page_size ))
+    ((total_pages < 1)) && total_pages=1
+
     page_index=$((cursor / page_size))
+}
+
+draw_line() {
+    local idx=$1
+    local start=$((page_index * page_size))
+    local row=$((idx - start + ${#header_ascii[@]} + 1))
+    tput cup $row 0
+
+    local label="${menu_labels[$idx]}"
+
+    case "${menu_colors[$idx]}" in
+        red)    label="\033[31m${label}\033[0m" ;;
+        cyan)   label="\033[36m${label}\033[0m" ;;
+        magenta) label="\033[35m${label}\033[0m" ;;
+    esac
+
+    if [[ $idx -eq $cursor ]]; then
+        printf "\e[7m%b\e[0m" "$label"
+    else
+        printf "%b" "$label"
+    fi
+    tput el
 }
 
 draw_page() {
     tput clear
-    for line in "${header[@]}"; do
+    for line in "${header_ascii[@]}"; do
         echo "$line"
     done
+
+    printf "Page %d / %d\n" $((page_index + 1)) "$total_pages"
 
     start=$((page_index * page_size))
     end=$((start + page_size - 1))
@@ -111,22 +162,6 @@ draw_page() {
     for ((i=start; i<=end; i++)); do
         draw_line $i
     done
-}
-
-draw_line() {
-    local idx=$1
-    local start=$((page_index * page_size))
-    local row=$((idx - start + ${#header[@]}))
-    tput cup $row 0
-
-    local label="${menu_labels[$idx]}"
-    [[ ${menu_colors[$idx]} == "red" ]] && label="\033[31m${label}\033[0m"
-    if [[ $idx -eq $cursor ]]; then
-        printf "\e[7m%b\e[0m" "$label"
-    else
-        printf "%b" "$label"
-    fi
-    tput el # clear to end of line to avoid leftover characters
 }
 
 move_cursor() {
@@ -145,7 +180,6 @@ move_cursor() {
     esac
 
     page_index=$((cursor / page_size))
-
     if ((page_index != old_page)); then
         draw_page
     else
