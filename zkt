@@ -30,7 +30,7 @@ header_ascii=(
 "  / /_/ -_) __/ __/ -_) /  '_/ _ \(_-</ __/ -_) _ \ "
 " /___/\__/\__/\__/\__/_/_/\_\\\_,_/___/\__/\__/_//_/ "
 ""
-"Navigate: j/k move | Enter open | l lit-note | p perm-note | r refresh | q quit"
+"Navigate: j/k move | , prev-page | . next-page | Enter open | l lit-note | p perm-note | r refresh | q quit"
 ""
 )
 
@@ -43,6 +43,8 @@ get_color_for_file() {
         echo "cyan"
     elif [[ "$name" == *_T_* ]]; then
         echo "magenta"
+    elif [[ "$name" == *_N_* ]]; then
+	echo "green"
     else
         echo "normal"
     fi
@@ -137,6 +139,7 @@ draw_line() {
         red)    label="\033[31m${label}\033[0m" ;;
         cyan)   label="\033[36m${label}\033[0m" ;;
         magenta) label="\033[35m${label}\033[0m" ;;
+        green) label="\033[32m${label}\033[0m" ;;
     esac
 
     if [[ $idx -eq $cursor ]]; then
@@ -188,6 +191,26 @@ move_cursor() {
     fi
 }
 
+move_page() {
+    local direction="$1"
+
+    case "$direction" in
+        next)
+            ((page_index++))
+            ((page_index >= total_pages)) && page_index=0
+            ;;
+        prev)
+            ((page_index--))
+            ((page_index < 0)) && page_index=$((total_pages - 1))
+            ;;
+    esac
+
+    cursor=$((page_index * page_size))
+    ((cursor >= count)) && cursor=$((count - 1))
+
+    draw_page
+}
+
 open_file() {
     "${EDITOR:-vim}" "${menu_files[$cursor]}"
     refresh_menu
@@ -206,6 +229,8 @@ while true; do
     case "$key" in
         k) move_cursor up ;;
         j) move_cursor down ;;
+        ,) move_page prev ;;
+        .) move_page next ;;
         "") open_file ;;
         l)
             tput clear
@@ -221,8 +246,8 @@ title: $title
 id: $ts
 date: $d
 source:
-	title:
-	author:
+    title:
+    author:
 type:
 tags:
   -
