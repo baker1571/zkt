@@ -7,6 +7,23 @@ if [[ ! -d "$BASE_DIR" ]]; then
     exit 1
 fi
 
+# Locate ln and pn directories anywhere inside BASE_DIR
+mapfile -t ln_dirs < <(find "$BASE_DIR" -type d -name "ln")
+mapfile -t pn_dirs < <(find "$BASE_DIR" -type d -name "pn")
+
+if (( ${#ln_dirs[@]} != 1 )); then
+    echo "Error: expected exactly one ln directory"
+    exit 1
+fi
+
+if (( ${#pn_dirs[@]} != 1 )); then
+    echo "Error: expected exactly one pn directory"
+    exit 1
+fi
+
+LN_DIR="${ln_dirs[0]}"
+PN_DIR="${pn_dirs[0]}"
+
 tput clear
 trap 'tput clear; exit' EXIT
 
@@ -25,10 +42,17 @@ total_pages=1
 
 # ASCII header
 header_ascii=(
-"  ____      __  __      ____            __          "
-" /_  / ___ / /_/ /____ / / /_____  ___ / /____ ___  "
-"  / /_/ -_) __/ __/ -_) /  '_/ _ \(_-</ __/ -_) _ \ "
-" /___/\__/\__/\__/\__/_/_/\_\\\_,_/___/\__/\__/_//_/ "
+"▄▄▄▄▄▄ ▄▄▄▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ ▄▄    ▄▄ ▄▄  ▄▄▄   ▄▄▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ ▄▄  ▄▄"
+"  ▄▄▀▀ ██▄▄    ██     ██   ██▄▄  ██    ██▄█▀ ██▀██ ███▄▄   ██   ██▄▄  ███▄██"
+"██▄▄▄▄ ██▄▄▄   ██     ██   ██▄▄▄ ██▄▄▄ ██ ██ ██▀██ ▄▄██▀   ██   ██▄▄▄ ██ ▀██"
+
+#"░▀▀█░█▀▀░▀█▀░▀█▀░█▀▀░█░░░█░█░█▀█░█▀▀░▀█▀░█▀▀░█▀█"
+#"░▄▀░░█▀▀░░█░░░█░░█▀▀░█░░░█▀▄░█▀█░▀▀█░░█░░█▀▀░█░█"
+#"░▀▀▀░▀▀▀░░▀░░░▀░░▀▀▀░▀▀▀░▀░▀░▀░▀░▀▀▀░░▀░░▀▀▀░▀░▀"
+#"  ____      __  __      ____            __          "
+#" /_  / ___ / /_/ /____ / / /_____  ___ / /____ ___  "
+#"  / /_/ -_) __/ __/ -_) /  '_/ _ \(_-</ __/ -_) _ \ "
+#" /___/\__/\__/\__/\__/_/_/\_\\\_,_/___/\__/\__/_//_/ "
 ""
 "Navigate: j/k move | , prev-page | . next-page | Enter open | l lit-note | p perm-note | r refresh | q quit"
 ""
@@ -44,9 +68,30 @@ get_color_for_file() {
     elif [[ "$name" == *_T_* ]]; then
         echo "magenta"
     elif [[ "$name" == *_N_* ]]; then
-	echo "green"
+        echo "green"
     else
         echo "normal"
+    fi
+}
+
+format_label() {
+    local file="$1"
+    local name
+    name=$(basename "$file")
+
+    local count
+
+    count=$(
+        {
+            echo "$name"
+            cat "$file"
+        } | grep -oE '\b[0-9]{14}\b' | sort -u | wc -l
+    )
+
+    if (( count <= 1 )); then
+        echo "*$name"
+    else
+        echo "$name"
     fi
 }
 
@@ -58,7 +103,7 @@ build_tree() {
     name=$(basename "${files_by_id[$current_id]}")
 
     menu_files+=("${files_by_id[$current_id]}")
-    menu_labels+=("${indent}${name}")
+    menu_labels+=("${indent}$(format_label "${files_by_id[$current_id]}")")
     menu_colors+=("$(get_color_for_file "${files_by_id[$current_id]}")")
 
     for linked_id in ${references[$current_id]}; do
@@ -68,7 +113,7 @@ build_tree() {
                 build_tree "$linked_id" "  $indent"
             else
                 menu_files+=("${files_by_id[$linked_id]}")
-                menu_labels+=("  ${indent}$(basename "${files_by_id[$linked_id]}")")
+                menu_labels+=("  ${indent}$(format_label "${files_by_id[$linked_id]}")")
 
                 base_color=$(get_color_for_file "${files_by_id[$linked_id]}")
                 [[ "$base_color" == "normal" ]] && base_color="red"
@@ -90,23 +135,28 @@ refresh_menu() {
     while IFS= read -r file; do
         filename=$(basename "$file")
         id="${filename:0:14}"
+
         [[ "$id" =~ ^[0-9]{14}$ ]] && files_by_id["$id"]="$file"
     done < <(find "$BASE_DIR" -type f -name "*.md")
 
     for id in "${!files_by_id[@]}"; do
         file="${files_by_id[$id]}"
+
         linked_ids=$(grep -oE '\b[0-9]{14}\b' "$file" | grep -v "^$id$" | sort -u)
+
         [[ -n "$linked_ids" ]] && references["$id"]="$linked_ids"
     done
 
     for id in "${!files_by_id[@]}"; do
         is_root=true
+
         for refs in "${references[@]}"; do
             if grep -q "$id" <<< "$refs"; then
                 is_root=false
                 break
             fi
         done
+
         if $is_root; then
             printed["$id"]=1
             build_tree "$id" ""
@@ -114,10 +164,12 @@ refresh_menu() {
     done
 
     count=${#menu_labels[@]}
-    ((cursor >= count)) && cursor=$((count-1))
+
+    ((cursor >= count)) && cursor=$((count - 1))
 
     rows=$(tput lines)
     header_lines=$(( ${#header_ascii[@]} + 1 ))
+
     page_size=$((rows - header_lines))
     ((page_size < 1)) && page_size=1
 
@@ -131,15 +183,16 @@ draw_line() {
     local idx=$1
     local start=$((page_index * page_size))
     local row=$((idx - start + ${#header_ascii[@]} + 1))
+
     tput cup $row 0
 
     local label="${menu_labels[$idx]}"
 
     case "${menu_colors[$idx]}" in
-        red)    label="\033[31m${label}\033[0m" ;;
-        cyan)   label="\033[36m${label}\033[0m" ;;
+        red)     label="\033[31m${label}\033[0m" ;;
+        cyan)    label="\033[36m${label}\033[0m" ;;
         magenta) label="\033[35m${label}\033[0m" ;;
-        green) label="\033[32m${label}\033[0m" ;;
+        green)   label="\033[32m${label}\033[0m" ;;
     esac
 
     if [[ $idx -eq $cursor ]]; then
@@ -147,11 +200,13 @@ draw_line() {
     else
         printf "%b" "$label"
     fi
+
     tput el
 }
 
 draw_page() {
     tput clear
+
     for line in "${header_ascii[@]}"; do
         echo "$line"
     done
@@ -160,10 +215,11 @@ draw_page() {
 
     start=$((page_index * page_size))
     end=$((start + page_size - 1))
+
     ((end >= count)) && end=$((count - 1))
 
     for ((i=start; i<=end; i++)); do
-        draw_line $i
+        draw_line "$i"
     done
 }
 
@@ -174,20 +230,21 @@ move_cursor() {
     case "$1" in
         up)
             ((cursor--))
-            ((cursor<0)) && cursor=$((count-1))
+            ((cursor < 0)) && cursor=$((count - 1))
             ;;
         down)
             ((cursor++))
-            ((cursor>=count)) && cursor=0
+            ((cursor >= count)) && cursor=0
             ;;
     esac
 
     page_index=$((cursor / page_size))
+
     if ((page_index != old_page)); then
         draw_page
     else
-        draw_line $old_cursor
-        draw_line $cursor
+        draw_line "$old_cursor"
+        draw_line "$cursor"
     fi
 }
 
@@ -212,9 +269,20 @@ move_page() {
 }
 
 open_file() {
-    "${EDITOR:-vim}" "${menu_files[$cursor]}"
-    refresh_menu
-    draw_page
+    local before after
+
+    before=$(find "$BASE_DIR" -type f -name "*.md" | wc -l)
+
+    "${EDITOR:-nvim}" "${menu_files[$cursor]}"
+
+    after=$(find "$BASE_DIR" -type f -name "*.md" | wc -l)
+
+    if [[ "$before" != "$after" ]]; then
+        refresh_menu
+        draw_page
+    else
+        draw_line "$cursor"
+    fi
 }
 
 refresh_and_draw() {
@@ -226,20 +294,40 @@ refresh_and_draw
 
 while true; do
     read -rsn1 key
+
     case "$key" in
-        k) move_cursor up ;;
-        j) move_cursor down ;;
-        ,) move_page prev ;;
-        .) move_page next ;;
-        "") open_file ;;
+        k)
+            move_cursor up
+            ;;
+
+        j)
+            move_cursor down
+            ;;
+
+        ,)
+            move_page prev
+            ;;
+
+        .)
+            move_page next
+            ;;
+
+        "")
+            open_file
+            ;;
+
         l)
             tput clear
+
             read -rp "Title: " title
             [[ -z "$title" ]] && continue
+
             ts=$(date +%Y%m%d%H%M%S)
             d=$(date +%Y-%m-%d)
             slug=${title// /_}
-            file="$BASE_DIR/${ts}_L_${slug}.md"
+
+            file="$LN_DIR/${ts}_L_${slug}.md"
+
             cat > "$file" <<EOF
 ---
 title: $title
@@ -253,17 +341,24 @@ tags:
   -
 ---
 EOF
+
             "${EDITOR:-nvim}" +13 "$file"
+
             refresh_and_draw
             ;;
+
         p)
             tput clear
+
             read -rp "Title: " title
             [[ -z "$title" ]] && continue
+
             ts=$(date +%Y%m%d%H%M%S)
             d=$(date +%Y-%m-%d)
             slug=${title// /_}
-            file="$BASE_DIR/${ts}_${slug}.md"
+
+            file="$PN_DIR/${ts}_${slug}.md"
+
             cat > "$file" <<EOF
 ---
 title: $title
@@ -274,10 +369,19 @@ tags:
   -
 ---
 EOF
+
             "${EDITOR:-nvim}" +10 "$file"
+
             refresh_and_draw
             ;;
-        r) refresh_and_draw ;;
-        q) tput clear; exit ;;
+
+        r)
+            refresh_and_draw
+            ;;
+
+        q)
+            tput clear
+            exit
+            ;;
     esac
 done
