@@ -40,21 +40,14 @@ count=0
 page_size=0
 total_pages=1
 
-# ASCII header
+search_query=""
+
 header_ascii=(
 "▄▄▄▄▄▄ ▄▄▄▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ ▄▄    ▄▄ ▄▄  ▄▄▄   ▄▄▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ ▄▄  ▄▄"
 "  ▄▄▀▀ ██▄▄    ██     ██   ██▄▄  ██    ██▄█▀ ██▀██ ███▄▄   ██   ██▄▄  ███▄██"
 "██▄▄▄▄ ██▄▄▄   ██     ██   ██▄▄▄ ██▄▄▄ ██ ██ ██▀██ ▄▄██▀   ██   ██▄▄▄ ██ ▀██"
-
-#"░▀▀█░█▀▀░▀█▀░▀█▀░█▀▀░█░░░█░█░█▀█░█▀▀░▀█▀░█▀▀░█▀█"
-#"░▄▀░░█▀▀░░█░░░█░░█▀▀░█░░░█▀▄░█▀█░▀▀█░░█░░█▀▀░█░█"
-#"░▀▀▀░▀▀▀░░▀░░░▀░░▀▀▀░▀▀▀░▀░▀░▀░▀░▀▀▀░░▀░░▀▀▀░▀░▀"
-#"  ____      __  __      ____            __          "
-#" /_  / ___ / /_/ /____ / / /_____  ___ / /____ ___  "
-#"  / /_/ -_) __/ __/ -_) /  '_/ _ \(_-</ __/ -_) _ \ "
-#" /___/\__/\__/\__/\__/_/_/\_\\\_,_/___/\__/\__/_//_/ "
 ""
-"Navigate: j/k move | , prev-page | . next-page | Enter open | l lit-note | p perm-note | r refresh | q quit"
+"Navigate: j/k move | , prev-page | . next-page | Enter open | l lit-note | p perm-note | / search | c clear search | r refresh | q quit"
 ""
 )
 
@@ -80,7 +73,6 @@ format_label() {
     name=$(basename "$file")
 
     local count
-
     count=$(
         {
             echo "$name"
@@ -95,12 +87,20 @@ format_label() {
     fi
 }
 
+file_matches_search() {
+    local file="$1"
+
+    [[ -z "$search_query" ]] && return 0
+
+    local name
+    name=$(basename "$file")
+
+    [[ "${name,,}" == *"${search_query,,}"* ]]
+}
+
 build_tree() {
     local current_id="$1"
     local indent="$2"
-
-    local name
-    name=$(basename "${files_by_id[$current_id]}")
 
     menu_files+=("${files_by_id[$current_id]}")
     menu_labels+=("${indent}$(format_label "${files_by_id[$current_id]}")")
@@ -113,7 +113,7 @@ build_tree() {
                 build_tree "$linked_id" "  $indent"
             else
                 menu_files+=("${files_by_id[$linked_id]}")
-                menu_labels+=("  ${indent}$(format_label "${files_by_id[$linked_id]}")")
+                menu_labels+=("${indent}$(format_label "${files_by_id[$linked_id]}")")
 
                 base_color=$(get_color_for_file "${files_by_id[$linked_id]}")
                 [[ "$base_color" == "normal" ]] && base_color="red"
@@ -136,14 +136,16 @@ refresh_menu() {
         filename=$(basename "$file")
         id="${filename:0:14}"
 
-        [[ "$id" =~ ^[0-9]{14}$ ]] && files_by_id["$id"]="$file"
+        [[ "$id" =~ ^[0-9]{14}$ ]] || continue
+
+        if file_matches_search "$file"; then
+            files_by_id["$id"]="$file"
+        fi
     done < <(find "$BASE_DIR" -type f -name "*.md")
 
     for id in "${!files_by_id[@]}"; do
         file="${files_by_id[$id]}"
-
         linked_ids=$(grep -oE '\b[0-9]{14}\b' "$file" | grep -v "^$id$" | sort -u)
-
         [[ -n "$linked_ids" ]] && references["$id"]="$linked_ids"
     done
 
@@ -164,7 +166,6 @@ refresh_menu() {
     done
 
     count=${#menu_labels[@]}
-
     ((cursor >= count)) && cursor=$((count - 1))
 
     rows=$(tput lines)
@@ -213,6 +214,8 @@ draw_page() {
 
     printf "Page %d / %d\n" $((page_index + 1)) "$total_pages"
 
+    [[ -n "$search_query" ]] && printf "Search: %s\n" "$search_query"
+
     start=$((page_index * page_size))
     end=$((start + page_size - 1))
 
@@ -249,9 +252,7 @@ move_cursor() {
 }
 
 move_page() {
-    local direction="$1"
-
-    case "$direction" in
+    case "$1" in
         next)
             ((page_index++))
             ((page_index >= total_pages)) && page_index=0
@@ -264,7 +265,6 @@ move_page() {
 
     cursor=$((page_index * page_size))
     ((cursor >= count)) && cursor=$((count - 1))
-
     draw_page
 }
 
@@ -296,29 +296,27 @@ while true; do
     read -rsn1 key
 
     case "$key" in
-        k)
-            move_cursor up
+        k) move_cursor up ;;
+        j) move_cursor down ;;
+        ,) move_page prev ;;
+        .) move_page next ;;
+        "") open_file ;;
+
+        /)
+            tput clear
+            read -rp "Search: " search_query
+            cursor=0
+            refresh_and_draw
             ;;
 
-        j)
-            move_cursor down
-            ;;
-
-        ,)
-            move_page prev
-            ;;
-
-        .)
-            move_page next
-            ;;
-
-        "")
-            open_file
+        c)
+            search_query=""
+            cursor=0
+            refresh_and_draw
             ;;
 
         l)
             tput clear
-
             read -rp "Title: " title
             [[ -z "$title" ]] && continue
 
@@ -343,13 +341,11 @@ tags:
 EOF
 
             "${EDITOR:-nvim}" +13 "$file"
-
             refresh_and_draw
             ;;
 
         p)
             tput clear
-
             read -rp "Title: " title
             [[ -z "$title" ]] && continue
 
@@ -371,7 +367,6 @@ tags:
 EOF
 
             "${EDITOR:-nvim}" +10 "$file"
-
             refresh_and_draw
             ;;
 
