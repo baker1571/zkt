@@ -2,3 +2,19 @@
 " ZETTELKASTEN CONFIG
 " ============================================================
 let g:zettelkasten_dir = '/path/to/the/zettelkasten'
+
+" ============================================================
+" OPEN ZETTEL FILE BY ID
+" ============================================================
+function! OpenZkFile()
+  let l:id = expand('<cfile>')
+
+  let l:matches = globpath(g:zettelkasten_dir, '**/' . l:id . '*.md', 0, 1)
+
+  if empty(l:matches)
+    echohl ErrorMsg | echo "No file found for ID: " . l:id | echohl None
+  else
+    execute 'edit ' . l:matches[0]
+  endif
+endfunction
+
